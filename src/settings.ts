@@ -5,7 +5,7 @@ import { nowMs } from "./utils/time";
 export interface GlobalSettings {
   base_url?: string;
   log_level?: string;
-  image_mode?: "url" | "base64";
+  image_mode?: "url" | "base64" | "b64_json";
   admin_username?: string;
   admin_password?: string;
   image_cache_max_size_mb?: number;
@@ -29,6 +29,7 @@ export interface GrokSettings {
   stream_chunk_timeout?: number;
   stream_total_timeout?: number;
   retry_status_codes?: number[];
+  image_generation_method?: "legacy" | "imagine_ws_experimental";
 }
 
 export interface TokenSettings {
@@ -105,6 +106,7 @@ const DEFAULTS: SettingsBundle = {
     stream_chunk_timeout: 120,
     stream_total_timeout: 600,
     retry_status_codes: [401, 429, 403],
+    image_generation_method: "legacy",
   },
   token: {
     auto_refresh: true,
