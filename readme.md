@@ -124,8 +124,8 @@ python scripts/smoke_test.py --base-url http://127.0.0.1:8000
 - 可设置注册数量（不填默认 `100`）
 - 可设置并发（默认 `10`）
 - 注册前会自动启动本地 Turnstile Solver（默认 5 线程），注册结束后自动关闭
-- 注册成功后会自动执行：同意用户协议（TOS）+ 开启 NSFW
-  - 若协议未成功同意或 NSFW 未成功开启，会判定该次注册失败并在前端显示错误原因
+- 注册成功后会自动执行：同意用户协议（TOS）+ 设置年龄 + 开启 NSFW
+  - 若 TOS / 年龄 / NSFW 任一步骤失败，会判定该次注册失败并在前端显示错误原因
 
 自动注册前置配置（在「配置管理」-> `register.*`）：
 - `register.worker_domain` / `register.email_domain` / `register.admin_password`：临时邮箱 Worker 配置
@@ -133,7 +133,7 @@ python scripts/smoke_test.py --base-url http://127.0.0.1:8000
 - 可选：`register.yescaptcha_key`（配置后优先走 YesCaptcha，无需本地 solver）
 
 升级兼容：
-- 本地部署升级后会自动对「旧 Token」做一次 TOS + NSFW（并发 10，best-effort，仅执行一次，避免重复刷）。
+- 本地部署升级后会自动对「旧 Token」做一次 TOS + 设置年龄 + NSFW（并发 10，best-effort，仅执行一次，避免重复刷）。
 
 ### 环境变量
 
@@ -155,7 +155,7 @@ python scripts/smoke_test.py --base-url http://127.0.0.1:8000
 - 升级时自动兼容迁移（本地/Docker）：
   - 旧版配置：检测到 `data/setting.toml` 时，会按“缺失字段/仍为默认值”的策略合并到新配置
   - 旧版缓存目录：`data/temp/{image,video}` -> `data/tmp/{image,video}`
-  - 旧账号一次性修复（best-effort）：升级后会对现有 Token 自动执行一次「同意用户协议 + 开启 NSFW」（并发 10）
+  - 旧账号一次性修复（best-effort）：升级后会对现有 Token 自动执行一次「同意用户协议 + 设置年龄 + 开启 NSFW」（并发 10）
 
 
 ### 可用次数
@@ -176,6 +176,7 @@ python scripts/smoke_test.py --base-url http://127.0.0.1:8000
 | `grok-4.1`               |  1  | Basic/Super |   支持   |   支持   |    -    |
 | `grok-4.1-thinking`      |  4  | Basic/Super |   支持   |   支持   |    -    |
 | `grok-imagine-1.0`       |  4  | Basic/Super |    -    |   支持   |    -    |
+| `grok-imagine-1.0-edit`  |  4  | Basic/Super |    -    |   支持   |    -    |
 | `grok-imagine-1.0-video` |  -  | Basic/Super |    -    |    -    |   支持   |
 
 <br>
@@ -221,7 +222,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ### `POST /v1/images/generations`
 
-> 图像接口，支持图像生成、图像编辑
+> 图像生成接口
 
 ```bash
 curl http://localhost:8000/v1/images/generations \
@@ -239,21 +240,54 @@ curl http://localhost:8000/v1/images/generations \
 
 <br>
 
-| 字段       | 类型    | 说明             | 可用参数                                     |
-| :--------- | :------ | :--------------- | :------------------------------------------- |
-| `model`  | string  | 图像模型名       | `grok-imagine-1.0`                         |
-| `prompt` | string  | 图像描述提示词   | -                                            |
-| `n`      | integer | 生成数量         | `1` - `10` (流式模式仅限 `1` 或 `2`) |
-| `stream` | boolean | 是否开启流式输出 | `true`, `false`                          |
+| 字段 | 类型 | 说明 | 可用参数 |
+| :--- | :--- | :--- | :--- |
+| `model` | string | 图像模型名 | `grok-imagine-1.0` |
+| `prompt` | string | 图像描述提示词 | - |
+| `n` | integer | 生成数量 | `1` - `10`（流式仅 `1` 或 `2`） |
+| `stream` | boolean | 是否开启流式输出 | `true`, `false` |
+| `size` | string | 图片尺寸/比例 | `1024x1024`、`16:9`、`9:16`、`1:1`、`2:3`、`3:2` |
+| `concurrency` | integer | 新方式并发数 | `1` - `3`（仅新生图方式生效） |
 | `response_format` | string | 图片返回格式 | `url`, `base64`, `b64_json`（默认跟随 `app.image_format`） |
 
-注：除上述外的其他参数将自动丢弃并忽略
+注：
+- `grok.image_generation_method=imagine_ws_experimental` 支持 `single`（单次）与 `continuous`（持续）两种模式。
+- `size` 在新方式下会映射为比例：`1024x576/1280x720/1536x864 -> 16:9`，`576x1024/720x1280/864x1536 -> 9:16`，`1024x1024/512x512 -> 1:1`，`1024x1536/512x768/768x1024 -> 2:3`，`1536x1024/768x512/1024x768 -> 3:2`；其他值默认 `2:3`。
+- 除上述外的其他参数将自动丢弃并忽略。
 
 <br>
 
 </details>
 
 <br>
+
+### `GET /v1/images/method`
+
+> 返回当前生图后端方式（`/chat` 与 `/admin/chat` 用于判断是否启用“新生图瀑布流 + 宽高比 + 并发”）
+
+```bash
+curl http://localhost:8000/v1/images/method \
+  -H "Authorization: Bearer $GROK2API_API_KEY"
+```
+
+返回示例：
+```json
+{ "image_generation_method": "legacy" }
+```
+
+- 可选值：`legacy`、`imagine_ws_experimental`
+- Cloudflare / Docker / 本地 三种部署均保持同一接口语义
+
+<br>
+
+#### `imagine_ws_experimental` (`/chat` + `/admin/chat`)
+
+- In experimental mode, the image panel is replaced and supports two run modes: `single` and `continuous`.
+- `single` keeps using `POST /v1/images/generations` and remains response-compatible.
+- `continuous` uses WebSocket: `/api/v1/admin/imagine/ws?api_key=<API_KEY>`.
+- WS commands: `start` / `stop` / `ping`.
+- WS events: `status` / `image` / `error` / `pong`.
+- Continuous payload includes `b64_json`, `sequence`, `elapsed_ms`, `aspect_ratio`, `run_id`.
 
 ### `POST /v1/images/edits`
 
@@ -262,7 +296,7 @@ curl http://localhost:8000/v1/images/generations \
 ```bash
 curl http://localhost:8000/v1/images/edits \
   -H "Authorization: Bearer $GROK2API_API_KEY" \
-  -F "model=grok-imagine-1.0" \
+  -F "model=grok-imagine-1.0-edit" \
   -F "prompt=给这只猫加一副太阳镜" \
   -F "image=@./cat.png" \
   -F "n=1" \
@@ -276,7 +310,7 @@ curl http://localhost:8000/v1/images/edits \
 
 | 字段 | 类型 | 说明 | 可用参数 |
 | :--- | :--- | :--- | :--- |
-| `model` | string | 图像模型名 | `grok-imagine-1.0` |
+| `model` | string | 图像模型名 | `grok-imagine-1.0-edit` |
 | `prompt` | string | 编辑提示词 | - |
 | `image` | file[] | 待编辑图片（最多 16 张） | `png`, `jpg`, `jpeg`, `webp` |
 | `n` | integer | 生成数量 | `1` - `10`（流式仅 `1` 或 `2`） |
@@ -345,6 +379,8 @@ curl http://localhost:8000/v1/images/edits \
 |                       | `fail_threshold`           | 失败阈值     | 单个 Token 连续失败多少次后被标记为不可用。          | `5`                                                     |
 |                       | `save_delay_ms`            | 保存延迟     | Token 变更合并写入的延迟（毫秒）。                   | `500`                                                   |
 |                       | `reload_interval_sec`      | 一致性刷新   | 多 worker 场景下 Token 状态刷新间隔（秒）。          | `30`                                                    |
+|                       | `nsfw_refresh_concurrency` | NSFW 刷新并发 | 同意协议/年龄/NSFW 刷新的默认并发数。                | `10`                                                    |
+|                       | `nsfw_refresh_retries`     | NSFW 刷新重试 | 刷新失败后的额外重试次数（不含首次）。               | `3`                                                     |
 | **cache**       | `enable_auto_clean`        | 自动清理     | 是否启用缓存自动清理，开启后按上限自动回收。         | `true`                                                  |
 |                       | `limit_mb`                 | 清理阈值     | 缓存大小阈值（MB），超过阈值会触发清理。             | `1024`                                                  |
 | **performance** | `assets_max_concurrent`    | 资产并发上限 | 资源上传/下载/列表的并发上限。推荐 25。              | `25`                                                    |
@@ -361,6 +397,16 @@ curl http://localhost:8000/v1/images/edits \
 - 新增 Token 统一归一化（`normalizeSsoToken`），修复 `sso=` 前缀导致的去重、导入、批量选择不一致问题。
 - 修复 API Key 更新接口“key 不存在仍返回成功”问题，统一为 `404`。
 - 优化 Token/API Key 页面错误提示，优先展示后端具体错误（`detail/error/message`）。
+
+## 本次更新补充（本地/Docker）
+
+- 新增：导入/手动添加/外部写入新增 Token 后，会在后台自动执行 `同意协议 + 设置年龄 + 开启 NSFW`。
+- 新增：Token 管理页增加「一键刷新 NSFW」按钮，默认对全部 Token 执行上述流程。
+- 新增：批量刷新默认并发 `10`，失败后额外重试 `3` 次；重试耗尽自动标记为失效。
+- 新增配置：
+  - `token.nsfw_refresh_concurrency`（默认 `10`）
+  - `token.nsfw_refresh_retries`（默认 `3`）
+- 说明：该功能仅在 `python-fastapi`（本地/Docker）开放；`cloudflare-workers` 侧不展示该按钮。
 
 ## Star History
 

@@ -116,8 +116,8 @@ Pages:
 Auto register will:
 - Start a local Turnstile Solver first (default 5 threads), then run registration
 - Stop the solver automatically when the job finishes
-- After a successful sign-up, it will automatically: accept TOS + enable NSFW
-  - If TOS/NSFW fails, the registration attempt is marked as failed and the UI will show the reason
+- After a successful sign-up, it will automatically: accept TOS + set BirthDate + enable NSFW
+  - If any TOS/BirthDate/NSFW step fails, the registration attempt is marked as failed and the UI will show the reason
 
 Required config keys (Admin -> Config, `register.*`):
 - `register.worker_domain` / `register.email_domain` / `register.admin_password`: temp-mail Worker settings
@@ -219,10 +219,15 @@ curl http://localhost:8000/v1/images/generations \
 | `model` | string | Image model ID | `grok-imagine-1.0` |
 | `prompt` | string | Prompt | - |
 | `n` | integer | Number of images | `1` - `10` (streaming: `1` or `2` only) |
+| `size` | string | Image size / aspect ratio (experimental method) | `1024x1024`, `16:9`, `9:16`, `1:1`, `2:3`, `3:2` |
+| `concurrency` | integer | Parallel upstream calls (experimental method) | `1` - `3` (default `1`) |
 | `stream` | boolean | Enable streaming | `true`, `false` |
 | `response_format` | string | Output format | `url`, `base64`, `b64_json` (defaults to `app.image_format`) |
 
-Note: any other parameters will be discarded and ignored.
+Notes:
+- when `grok.image_generation_method=imagine_ws_experimental`, `stream=true` uses SSE realtime image events (`image_generation.partial_image` then `image_generation.completed`) and keeps SSE semantics even on fallback.
+- `size` is normalized to aspect ratios: `16:9`, `9:16`, `1:1`, `2:3`, `3:2`; unsupported values default to `2:3`.
+- any other parameters will be discarded and ignored.
 
 <br>
 
@@ -230,13 +235,30 @@ Note: any other parameters will be discarded and ignored.
 
 <br>
 
+### `GET /v1/images/method`
+> Get the active image-generation backend mode (used by `/chat` and `/admin/chat` to toggle the experimental waterfall UI).
+
+```bash
+curl http://localhost:8000/v1/images/method \
+  -H "Authorization: Bearer $GROK2API_API_KEY"
+```
+
+Response example:
+```json
+{ "image_generation_method": "legacy" }
+```
+
+`image_generation_method` values:
+- `legacy`
+- `imagine_ws_experimental`
+
 ### `POST /v1/images/edits`
 > Image edit endpoint (`multipart/form-data`)
 
 ```bash
 curl http://localhost:8000/v1/images/edits \
   -H "Authorization: Bearer $GROK2API_API_KEY" \
-  -F "model=grok-imagine-1.0" \
+  -F "model=grok-imagine-1.0-edit" \
   -F "prompt=Add sunglasses to this cat" \
   -F "image=@./cat.png" \
   -F "n=1" \
@@ -250,7 +272,7 @@ curl http://localhost:8000/v1/images/edits \
 
 | Field | Type | Description | Allowed values |
 | :--- | :--- | :--- | :--- |
-| `model` | string | Image model ID | `grok-imagine-1.0` |
+| `model` | string | Image model ID | `grok-imagine-1.0-edit` |
 | `prompt` | string | Edit prompt | - |
 | `image` | file[] | Source image(s), up to 16 files | `png`, `jpg`, `jpeg`, `webp` |
 | `n` | integer | Number of images | `1` - `10` (streaming: `1` or `2` only) |
@@ -291,7 +313,7 @@ When upgrading from older versions, the service will keep existing local data an
 
 - Legacy config: if `data/setting.toml` exists, it will be merged into `data/config.toml` (only fills missing keys or keys still set to defaults).
 - Legacy cache dir: old `data/temp/{image,video}` will be migrated to `data/tmp/{image,video}` so unexpired caches are not lost.
-- Legacy accounts (best-effort, one-time): after upgrade, existing tokens will automatically run a TOS + NSFW enablement pass once (concurrency 10) to keep old accounts compatible.
+- Legacy accounts (best-effort, one-time): after upgrade, existing tokens will automatically run a TOS + BirthDate + NSFW pass once (concurrency 10) to keep old accounts compatible.
 - Docker: make sure `./data:/app/data` (and `./logs:/app/logs`) are mounted persistently, otherwise container rebuilds will lose local data.
 
 | Module | Field | Key | Description | Default |
@@ -315,6 +337,7 @@ When upgrading from older versions, the service will keep existing local data an
 | | `max_retry` | Max retries | Max retries on Grok request failure. | `3` |
 | | `retry_status_codes` | Retry status codes | HTTP status codes that trigger retry. | `[401, 429, 403]` |
 | | `image_generation_method` | Image generation method | Image invoke method (`legacy` is stable default; `imagine_ws_experimental` is experimental). | `legacy` |
+| |  |  | Backward-compatible aliases (`imagine_ws`, `experimental`, `new`, `new_method`) are automatically normalized to `imagine_ws_experimental`. |  |
 | **token** | `auto_refresh` | Auto refresh | Enable automatic token refresh. | `true` |
 | | `refresh_interval_hours` | Refresh interval | Token refresh interval (hours). | `8` |
 | | `fail_threshold` | Failure threshold | Consecutive failures before a token is disabled. | `5` |
